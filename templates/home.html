@@ -111,8 +111,10 @@
 
                         <!-- 回归参数 -->
                         <div class="mb-2 algo-param" id="regressionParam" style="display:none">
-                            <label class="form-label small">目标列（Y）</label>
-                            <select class="form-select form-select-sm" id="regTargetCol"></select>
+                            <label class="form-label small">目标列 Y（预测目标）</label>
+                            <select class="form-select form-select-sm mb-2" id="regTargetCol"></select>
+                            <label class="form-label small">特征列 X（可多选，不选则用所有数值列）</label>
+                            <div id="regFeatureCheckboxes" class="border rounded p-2" style="max-height:120px;overflow-y:auto;"></div>
                         </div>
 
                         <!-- PCA 参数 -->
@@ -263,6 +265,16 @@
                 fillSelect('yColSelect', currentNumericCols);
                 fillSelect('regTargetCol', currentNumericCols);
 
+                // 回归特征多选复选框
+                const cbDiv = document.getElementById('regFeatureCheckboxes');
+                cbDiv.innerHTML = '';
+                currentNumericCols.forEach((col, i) => {
+                    const checked = i !== currentNumericCols.length - 1 ? 'checked' : '';
+                    cbDiv.innerHTML += `<div class="form-check form-check-inline small">
+                        <input class="form-check-input reg-feature-cb" type="checkbox" value="${col}" id="rf_${i}" ${checked}>
+                        <label class="form-check-label" for="rf_${i}">${col}</label></div>`;
+                });
+
                 // 默认选前两个数值列
                 if (currentNumericCols.length >= 2) {
                     document.getElementById('xColSelect').value = currentNumericCols[0];
@@ -319,21 +331,65 @@
 
     // ===================== 3. 刷新图表 =====================
     function refreshChart() {
+        // 优先使用分析结果
+        if (lastAnalysisResult && lastAnalysisResult.chart_default) {
+            renderChart(lastAnalysisResult, currentChartType);
+            return;
+        }
+        // 无分析结果时从后端获取原始数据
+        if (currentNumericCols.length === 0 && currentColumns.length === 0) {
+            loadColumnInfo();
+            return;
+        }
+        fetchAndRenderChart();
+    }
+
+    async function fetchAndRenderChart() {
         const xCol = document.getElementById('xColSelect').value;
         const yCol = document.getElementById('yColSelect').value;
+        try {
+            const resp = await axios.post('/api/chart-data', { x_col: xCol, y_col: yCol });
+            const res = resp.data;
+            if (res.status === 'error') {
+                document.getElementById('chartHint').innerText = res.msg;
+                return;
+            }
+            document.getElementById('chartHint').innerText = '原始数据可视化 — 运行分析可获得更丰富的图表';
+            renderRawChart(res, currentChartType);
+        } catch (err) {
+            console.error(err);
+            document.getElementById('chartHint').innerText = '获取图表数据失败';
+        }
+    }
 
-        // 优先使用分析结果中的图表数据
-        if (lastAnalysisResult && lastAnalysisResult.chart_default) {
-            renderChart(lastAnalysisResult, currentChartType, xCol, yCol);
-            return;
+    function renderRawChart(rawData, chartType) {
+        const container = document.getElementById('chartContainer');
+        if (!chartInstance) {
+            chartInstance = echarts.init(container);
+            window.addEventListener('resize', () => chartInstance.resize());
         }
 
-        // 没有分析结果时，用原始数据生成图表
-        if (currentNumericCols.length === 0) {
-            if (currentColumns.length > 0) loadColumnInfo();
-            return;
+        let option;
+        switch (chartType) {
+            case 'scatter':
+                option = buildRawScatter(rawData);
+                break;
+            case 'bar':
+                option = buildRawBar(rawData);
+                break;
+            case 'line':
+                option = buildRawLine(rawData);
+                break;
+            case 'heatmap':
+                option = buildRawHeatmap(rawData);
+                break;
+            case 'pie':
+                option = buildRawPie(rawData);
+                break;
+            default:
+                option = buildRawScatter(rawData);
         }
-        renderSimpleChart(xCol, yCol);
+        chartInstance.setOption(option, true);
     }
 
     // ===================== 4. 运行分析 =====================
@@ -345,6 +401,12 @@
             params.n_clusters = parseInt(document.getElementById('kmeansK').value) || 3;
         } else if (algo === 'regression') {
             params.target_col = document.getElementById('regTargetCol').value;
+            // 收集选中的特征列
+            const cbs = document.querySelectorAll('.reg-feature-cb:checked');
+            const selected = Array.from(cbs).map(cb => cb.value);
+            if (selected.length > 0) {
+                params.feature_cols = selected;
+            }
         } else if (algo === 'pca') {
             params.n_components = parseInt(document.getElementById('pcaN').value) || 2;
         } else if (algo === 'random_forest') {
@@ -629,18 +691,93 @@
         };
     }
 
-    // 简单图表（无分析结果时）
-    function renderSimpleChart(xCol, yCol) {
-        // 此处仅作为占位 — 实际场景中需要从后端取原始数据
-        // 提示用户先上传数据或运行分析
-        const container = document.getElementById('chartContainer');
-        if (!chartInstance) {
-            chartInstance = echarts.init(container);
-            window.addEventListener('resize', () => chartInstance.resize());
+    // ========== 原始数据图表构建器（无分析结果时使用 /api/chart-data 数据） ==========
+    function buildRawScatter(raw) {
+        const pts = raw.scatter_data || [];
+        return {
+            title: { text: `散点图: ${raw.y_label||'Y'} vs ${raw.x_label||'X'}`, left: 'center', textStyle: { fontSize: 14 } },
+            tooltip: { trigger: 'item' },
+            xAxis: { name: raw.x_label || 'X', type: 'value' },
+            yAxis: { name: raw.y_label || 'Y', type: 'value' },
+            series: [{ name: '数据点', type: 'scatter', data: pts.map(d => [d.x, d.y]), symbolSize: 5 }]
+        };
+    }
+
+    function buildRawBar(raw) {
+        const bars = raw.bar_data || [];
+        const names = bars.map(b => b.name).reverse();
+        const vals = bars.map(b => b.mean).reverse();
+        return {
+            title: { text: '数值列均值对比', left: 'center', textStyle: { fontSize: 14 } },
+            tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+            grid: { left: '18%', right: '5%', bottom: '8%' },
+            xAxis: { name: '均值', type: 'value' },
+            yAxis: { data: names, type: 'category', axisLabel: { fontSize: 10 } },
+            series: [{ name: '均值', type: 'bar', data: vals, itemStyle: { color: '#fd7e14' } }]
+        };
+    }
+
+    function buildRawLine(raw) {
+        const pts = raw.scatter_data || [];
+        // Line needs sorted X
+        const sorted = [...pts].sort((a, b) => a.x - b.x);
+        return {
+            title: { text: `趋势: ${raw.y_label||'Y'} vs ${raw.x_label||'X'}`, left: 'center', textStyle: { fontSize: 14 } },
+            tooltip: { trigger: 'axis' },
+            xAxis: { name: raw.x_label || 'X', type: 'value' },
+            yAxis: { name: raw.y_label || 'Y', type: 'value' },
+            series: [{ name: raw.y_label || 'Y', type: 'line', data: sorted.map(d => [d.x, d.y]),
+                       smooth: true, symbol: 'none' }]
+        };
+    }
+
+    function buildRawHeatmap(raw) {
+        if (raw.correlation && raw.correlation.columns && raw.correlation.columns.length >= 2) {
+            const cols = raw.correlation.columns;
+            const mat = raw.correlation.matrix;
+            const data = [];
+            cols.forEach((c1, i) => {
+                cols.forEach((c2, j) => {
+                    data.push([j, i, mat[i][j]]);
+                });
+            });
+            return {
+                title: { text: '数值列相关性热力图', left: 'center', textStyle: { fontSize: 14 } },
+                tooltip: { position: 'top' },
+                grid: { left: '15%', right: '5%', top: '12%', bottom: '10%' },
+                xAxis: { data: cols, type: 'category', axisLabel: { rotate: 45, fontSize: 9 }, position: 'top' },
+                yAxis: { data: cols, type: 'category', axisLabel: { fontSize: 9 } },
+                visualMap: { min: -1, max: 1, calculable: true, orient: 'horizontal',
+                    left: 'center', bottom: 0, inRange: { color: ['#313695', '#ffffbf', '#a50026'] } },
+                series: [{ name: '相关系数', type: 'heatmap', data: data,
+                    label: { show: true, fontSize: 9, formatter: p => p.value[2].toFixed(2) },
+                    emphasis: { itemStyle: { shadowBlur: 10, shadowColor: 'rgba(0,0,0,0.5)' } } }]
+            };
         }
-        chartInstance.setOption({
-            title: { text: '请上传数据后查看图表', left: 'center', top: 'center', textStyle: { color: '#999', fontSize: 16 } }
-        }, true);
+        return {
+            title: { text: '需要至少 2 个数值列生成热力图', left: 'center', top: 'center',
+                     textStyle: { color: '#999', fontSize: 14 } }
+        };
+    }
+
+    function buildRawPie(raw) {
+        if (raw.pie_data && raw.pie_data.length > 0) {
+            return {
+                title: { text: `分类分布 (${raw.pie_column || ''})`, left: 'center', textStyle: { fontSize: 14 } },
+                tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
+                legend: { bottom: 5, type: 'scroll' },
+                series: [{
+                    name: raw.pie_column || '类别', type: 'pie', radius: ['35%', '65%'],
+                    data: raw.pie_data,
+                    label: { formatter: '{b}\n{d}%' },
+                    emphasis: { itemStyle: { shadowBlur: 10, shadowColor: 'rgba(0,0,0,0.5)' } }
+                }]
+            };
+        }
+        return {
+            title: { text: '请先上传包含分类列的数据', left: 'center', top: 'center',
+                     textStyle: { color: '#999', fontSize: 14 } }
+        };
     }
 
     // ===================== 5. 评估结果渲染 =====================

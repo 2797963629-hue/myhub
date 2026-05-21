@@ -240,6 +240,77 @@ def columns_api():
         "categorical_columns": categorical_cols
     })
 
+# 获取图表原始数据（不依赖分析结果，上传数据后即可用）
+@app.route("/api/chart-data", methods=["POST"])
+def chart_data_api():
+    file_path = current_state.get("file_path")
+    if not file_path or not os.path.exists(file_path):
+        return jsonify({"status": "error", "msg": "请先上传数据"})
+
+    req_data = request.get_json() or {}
+    x_col = req_data.get("x_col", "")
+    y_col = req_data.get("y_col", "")
+
+    try:
+        if file_path.endswith('.csv'):
+            df = pd.read_csv(file_path)
+        else:
+            df = pd.read_excel(file_path)
+
+        if len(df) > 2000:
+            df = df.sample(2000, random_state=42)
+
+        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+        cat_cols = df.select_dtypes(include=['object', 'category']).columns.tolist()
+        all_cols = df.columns.tolist()
+        result = {"status": "success"}
+
+        # ---- 相关性矩阵（热力图用） ----
+        if len(numeric_cols) >= 2:
+            corr = df[numeric_cols].corr()
+            result["correlation"] = {
+                "columns": numeric_cols,
+                "matrix": [[round(float(v), 4) if not pd.isna(v) else None for v in row]
+                           for row in corr.values.tolist()]
+            }
+
+        # ---- 饼图数据（取第一个分类列的分布） ----
+        if cat_cols:
+            ccol = cat_cols[0]
+            vc = df[ccol].value_counts().head(15)
+            result["pie_data"] = [{"name": str(k), "value": int(v)} for k, v in vc.items()]
+            result["pie_column"] = ccol
+
+        # ---- 散点图 / 折线图数据 ----
+        use_x = x_col if x_col and x_col in df.columns else (numeric_cols[0] if numeric_cols else "")
+        use_y = y_col if y_col and y_col in df.columns else (numeric_cols[1] if len(numeric_cols) > 1 else use_x)
+
+        if use_x and use_y and use_x in df.columns and use_y in df.columns:
+            pts = df[[use_x, use_y]].dropna()
+            result["scatter_data"] = [
+                {"x": float(r[use_x]), "y": float(r[use_y])}
+                for _, r in pts.iterrows()
+            ]
+            result["x_label"] = use_x
+            result["y_label"] = use_y
+
+        # ---- 柱状图数据（数值列均值） ----
+        result["bar_data"] = [
+            {"name": col, "mean": round(float(df[col].dropna().mean()), 4),
+             "max": round(float(df[col].dropna().max()), 4),
+             "min": round(float(df[col].dropna().min()), 4),
+             "std": round(float(df[col].dropna().std()), 4)}
+            for col in numeric_cols[:10]
+        ]
+
+        result["numeric_columns"] = numeric_cols
+        result["categorical_columns"] = [c for c in all_cols if c not in numeric_cols]
+
+        return jsonify(result)
+
+    except Exception as e:
+        return jsonify({"status": "error", "msg": f"获取图表数据失败: {str(e)}"})
+
 # 分析接口（聚类/预测/降维/分类 + 效果评估）
 @app.route("/api/analyze", methods=["POST"])
 def analyze_api():
@@ -335,14 +406,15 @@ def analyze_api():
         # 线性回归
         # ============================================================
         elif algorithm == "regression":
-            if not y_col or y_col not in df_sample.columns:
-                y_col = numeric_cols[-1]
-            feature_cols = params.get("feature_cols", [c for c in numeric_cols if c != y_col])
+            target_col = params.get("target_col", y_col)
+            if not target_col or target_col not in df_sample.columns:
+                target_col = numeric_cols[-1]
+            feature_cols = params.get("feature_cols", [c for c in numeric_cols if c != target_col])
             if not feature_cols:
-                feature_cols = [c for c in numeric_cols if c != y_col]
+                feature_cols = [c for c in numeric_cols if c != target_col]
 
             X_reg = df_sample[feature_cols].dropna()
-            y_reg = df_sample.loc[X_reg.index, y_col].dropna()
+            y_reg = df_sample.loc[X_reg.index, target_col].dropna()
             X_reg = X_reg.loc[y_reg.index]
             y_reg = y_reg.loc[X_reg.index]
 
@@ -372,7 +444,7 @@ def analyze_api():
 
             result.update({
                 "algorithm": "线性回归",
-                "target_column": y_col,
+                "target_column": target_col,
                 "feature_columns": feature_cols,
                 "coefficients": coef_dict,
                 "intercept": intercept,
@@ -387,8 +459,8 @@ def analyze_api():
                     "data_type": "pred_vs_true",
                     "data": scatter_data,
                     "title": f"线性回归: 预测值 vs 真实值 (R²={round(r2,3)})",
-                    "x_label": f"真实值 ({y_col})",
-                    "y_label": f"预测值 ({y_col})"
+                    "x_label": f"真实值 ({target_col})",
+                    "y_label": f"预测值 ({target_col})"
                 }
             })
 
@@ -502,7 +574,7 @@ def analyze_api():
 
             result.update({
                 "algorithm": "随机森林分类",
-                "target_column": target_col if categorical_cols or len(numeric_cols) > 2 else y_col,
+                "target_column": target_col,
                 "feature_columns": feature_cols,
                 "n_classes": len(class_names),
                 "class_names": class_names,

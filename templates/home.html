@@ -1,0 +1,753 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>工作台 - 交互式数据分析系统</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+    <style>
+        body { background-color: #f8f9fa; }
+        .navbar { box-shadow: 0 2px 10px rgba(0,0,0,0.05); }
+        .card { border: none; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.03); margin-bottom: 20px; }
+        .section-title { font-weight: bold; border-left: 4px solid #0d6efd; padding-left: 10px; margin-bottom: 20px;}
+        #dataPreview { max-height: 300px; overflow-y: auto; }
+        .chart-box { width: 100%; height: 400px; }
+        .metrics-table td, .metrics-table th { font-size: 0.85rem; }
+        .chart-type-btn { min-width: 55px; }
+    </style>
+</head>
+<body>
+
+    <nav class="navbar navbar-expand-lg navbar-light bg-white mb-4">
+        <div class="container-fluid px-4">
+            <a class="navbar-brand text-primary fw-bold" href="#">IDAS Workspace</a>
+            <div class="d-flex align-items-center">
+                <span class="me-3 text-muted">欢迎回来，分析师</span>
+                <a href="/login_page" class="btn btn-outline-danger btn-sm">退出登录</a>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container-fluid px-4">
+        <div class="row">
+            <!-- ========== 左侧面板 ========== -->
+            <div class="col-md-4">
+                <!-- 1. 数据源管理 -->
+                <div class="card p-3">
+                    <div class="card-body">
+                        <h5 class="section-title">1. 数据源管理</h5>
+                        <form id="uploadForm">
+                            <div class="mb-3">
+                                <label for="dataFile" class="form-label">上传 CSV/Excel 数据集</label>
+                                <input class="form-control" type="file" id="dataFile" accept=".csv, .xlsx">
+                            </div>
+                            <button type="button" class="btn btn-primary w-100" onclick="uploadData()">
+                                上传并解析数据
+                            </button>
+                        </form>
+                        <div id="uploadStatus" class="mt-2 text-success" style="display: none;"></div>
+                    </div>
+                </div>
+
+                <!-- 2. 数据清洗 -->
+                <div class="card p-3">
+                    <div class="card-body">
+                        <h5 class="section-title">2. 数据清洗</h5>
+                        <div class="d-grid gap-2">
+                            <button class="btn btn-outline-warning" onclick="cleanData('dropna')">去除缺失值</button>
+                            <button class="btn btn-outline-info" onclick="cleanData('drop_duplicates')">去除重复项</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 3. 可视化图表配置 -->
+                <div class="card p-3">
+                    <div class="card-body">
+                        <h5 class="section-title">3. 可视化图表</h5>
+
+                        <label class="form-label small">图表类型</label>
+                        <div class="d-flex gap-1 flex-wrap mb-3">
+                            <button class="btn btn-sm btn-outline-secondary chart-type-btn active" data-type="scatter" onclick="setChartType('scatter')">散点图</button>
+                            <button class="btn btn-sm btn-outline-secondary chart-type-btn" data-type="bar" onclick="setChartType('bar')">柱状图</button>
+                            <button class="btn btn-sm btn-outline-secondary chart-type-btn" data-type="line" onclick="setChartType('line')">折线图</button>
+                            <button class="btn btn-sm btn-outline-secondary chart-type-btn" data-type="heatmap" onclick="setChartType('heatmap')">热力图</button>
+                            <button class="btn btn-sm btn-outline-secondary chart-type-btn" data-type="pie" onclick="setChartType('pie')">饼图</button>
+                        </div>
+
+                        <label class="form-label small">X 轴 / 标签</label>
+                        <select class="form-select form-select-sm mb-2" id="xColSelect">
+                            <option value="">自动选择</option>
+                        </select>
+
+                        <label class="form-label small">Y 轴 / 数值</label>
+                        <select class="form-select form-select-sm mb-3" id="yColSelect">
+                            <option value="">自动选择</option>
+                        </select>
+
+                        <button class="btn btn-outline-primary btn-sm w-100" onclick="refreshChart()">刷新图表</button>
+                    </div>
+                </div>
+
+                <!-- 4. 机器学习分析 -->
+                <div class="card p-3">
+                    <div class="card-body">
+                        <h5 class="section-title">4. 机器学习分析</h5>
+
+                        <label class="form-label small">算法选择</label>
+                        <select class="form-select form-select-sm mb-2" id="algorithmSelect" onchange="onAlgoChange()">
+                            <option value="kmeans">K-Means 聚类</option>
+                            <option value="regression">线性回归预测</option>
+                            <option value="pca">PCA 降维</option>
+                            <option value="random_forest">随机森林分类</option>
+                        </select>
+
+                        <!-- K-Means 参数 -->
+                        <div class="mb-2 algo-param" id="kmeansParam">
+                            <label class="form-label small">聚类数 K</label>
+                            <input class="form-control form-control-sm" type="number" id="kmeansK" value="3" min="2" max="10">
+                        </div>
+
+                        <!-- 回归参数 -->
+                        <div class="mb-2 algo-param" id="regressionParam" style="display:none">
+                            <label class="form-label small">目标列（Y）</label>
+                            <select class="form-select form-select-sm" id="regTargetCol"></select>
+                        </div>
+
+                        <!-- PCA 参数 -->
+                        <div class="mb-2 algo-param" id="pcaParam" style="display:none">
+                            <label class="form-label small">降维维度</label>
+                            <input class="form-control form-control-sm" type="number" id="pcaN" value="2" min="1" max="10">
+                        </div>
+
+                        <!-- 随机森林参数 -->
+                        <div class="mb-2 algo-param" id="rfParam" style="display:none">
+                            <label class="form-label small">树的数量</label>
+                            <input class="form-control form-control-sm" type="number" id="rfNEstimators" value="100" min="10" max="500">
+                        </div>
+
+                        <button class="btn btn-success w-100" onclick="runAnalysis()">运行模型</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ========== 右侧面板 ========== -->
+            <div class="col-md-8">
+                <!-- 数据预览 -->
+                <div class="card p-3">
+                    <div class="card-body">
+                        <h5 class="section-title">数据预览</h5>
+
+                        <div id="dataInfo" class="mb-2 small text-muted"></div>
+
+                        <div class="table-responsive" id="dataPreview">
+                            <table class="table table-striped table-hover table-sm text-center">
+                                <thead id="tableHead" class="table-dark">
+                                    <tr><th>请先上传数据...</th></tr>
+                                </thead>
+                                <tbody id="tableBody"></tbody>
+                            </table>
+                        </div>
+                        <div class="mt-3 text-end">
+                            <button class="btn btn-secondary btn-sm" onclick="exportData()">导出处理后数据</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 可视化图表 -->
+                <div class="card p-3">
+                    <div class="card-body">
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <h5 class="section-title mb-0">交互式可视化图表</h5>
+                            <span id="chartHint" class="text-muted small">上传数据后可用</span>
+                        </div>
+                        <div id="chartContainer" class="chart-box"></div>
+                    </div>
+                </div>
+
+                <!-- 分析结果 -->
+                <div class="card p-3" id="resultCard" style="display:none">
+                    <div class="card-body">
+                        <h5 class="section-title">分析结果与评估</h5>
+                        <div id="resultContent"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+
+    <script>
+    // ===================== 全局状态 =====================
+    let currentColumns = [];
+    let currentNumericCols = [];
+    let currentCategoricalCols = [];
+    let lastAnalysisResult = null;
+    let currentChartType = 'scatter';
+    let chartInstance = null;
+
+    // ===================== 图表类型选择 =====================
+    function setChartType(type) {
+        currentChartType = type;
+        document.querySelectorAll('.chart-type-btn').forEach(b => b.classList.remove('active'));
+        document.querySelector(`[data-type="${type}"]`).classList.add('active');
+        refreshChart();
+    }
+
+    // ===================== 算法切换，显示对应参数 =====================
+    function onAlgoChange() {
+        const algo = document.getElementById('algorithmSelect').value;
+        document.querySelectorAll('.algo-param').forEach(el => el.style.display = 'none');
+        const map = {
+            'kmeans': 'kmeansParam',
+            'regression': 'regressionParam',
+            'pca': 'pcaParam',
+            'random_forest': 'rfParam'
+        };
+        const target = document.getElementById(map[algo]);
+        if (target) target.style.display = 'block';
+    }
+
+    // ===================== 1. 上传数据 =====================
+    function uploadData() {
+        const fileInput = document.getElementById('dataFile');
+        if (fileInput.files.length === 0) {
+            alert("请先选择文件！");
+            return;
+        }
+
+        const formData = new FormData();
+        formData.append('file', fileInput.files[0]);
+
+        axios.post('/api/upload', formData, {
+            headers: { 'Content-Type': 'multipart/form-data' }
+        }).then(response => {
+            const res = response.data;
+            if (res.status === 'success') {
+                const infoDiv = document.getElementById('dataInfo');
+                if (res.is_truncated) {
+                    infoDiv.innerHTML = `<span class="badge bg-warning text-dark">提示</span> 数据量较大（共 ${res.total_rows} 行），当前仅展示前 1000 行预览。`;
+                } else {
+                    infoDiv.innerHTML = `共加载了 ${res.total_rows} 行数据。`;
+                }
+
+                document.getElementById('uploadStatus').innerText = "解析成功！";
+                document.getElementById('uploadStatus').style.display = "block";
+
+                renderTable(res.columns, res.data);
+
+                // 加载列信息和图表
+                loadColumnInfo();
+            } else {
+                alert("错误: " + res.msg);
+            }
+        }).catch(error => {
+            console.error(error);
+            alert("上传失败，请检查后端 API。");
+        });
+    }
+
+    // ===================== 加载列信息 =====================
+    function loadColumnInfo() {
+        axios.get('/api/columns').then(response => {
+            const res = response.data;
+            if (res.status === 'success') {
+                currentColumns = res.columns || [];
+                currentNumericCols = res.numeric_columns || [];
+                currentCategoricalCols = res.categorical_columns || [];
+
+                // 填充下拉框
+                fillSelect('xColSelect', currentColumns);
+                fillSelect('yColSelect', currentNumericCols);
+                fillSelect('regTargetCol', currentNumericCols);
+
+                // 默认选前两个数值列
+                if (currentNumericCols.length >= 2) {
+                    document.getElementById('xColSelect').value = currentNumericCols[0];
+                    document.getElementById('yColSelect').value = currentNumericCols[1];
+                    document.getElementById('regTargetCol').value = currentNumericCols[currentNumericCols.length-1];
+                }
+
+                document.getElementById('chartHint').innerText = '选择图表类型和坐标轴，点击刷新';
+                // 自动生成初始图表
+                refreshChart();
+            }
+        }).catch(err => {
+            console.error(err);
+        });
+    }
+
+    function fillSelect(id, options) {
+        const sel = document.getElementById(id);
+        sel.innerHTML = '<option value="">自动选择</option>';
+        options.forEach(opt => {
+            sel.innerHTML += `<option value="${opt}">${opt}</option>`;
+        });
+    }
+
+    // ===================== 2. 数据清洗 =====================
+    function cleanData(action) {
+        axios.post('/api/clean', { action: action })
+            .then(response => {
+                const res = response.data;
+                if (res.status === 'success') {
+                    const infoDiv = document.getElementById('dataInfo');
+                    if (res.is_truncated) {
+                        infoDiv.innerHTML = `<span class="badge bg-warning text-dark">已清洗</span> ${res.msg}，当前仅展示前 1000 行预览。`;
+                    } else {
+                        infoDiv.innerHTML = `<span class="badge bg-success">已清洗</span> ${res.msg}`;
+                    }
+
+                    document.getElementById('uploadStatus').innerText = res.msg;
+                    document.getElementById('uploadStatus').style.display = "block";
+
+                    if (res.columns) {
+                        renderTable(res.columns, res.data);
+                    }
+                    loadColumnInfo();
+                } else {
+                    alert("清洗失败: " + res.msg);
+                }
+            })
+            .catch(err => {
+                console.error(err);
+                alert("清洗请求失败，请检查后端 API。");
+            });
+    }
+
+    // ===================== 3. 刷新图表 =====================
+    function refreshChart() {
+        const xCol = document.getElementById('xColSelect').value;
+        const yCol = document.getElementById('yColSelect').value;
+
+        // 优先使用分析结果中的图表数据
+        if (lastAnalysisResult && lastAnalysisResult.chart_default) {
+            renderChart(lastAnalysisResult, currentChartType, xCol, yCol);
+            return;
+        }
+
+        // 没有分析结果时，用原始数据生成图表
+        if (currentNumericCols.length === 0) {
+            if (currentColumns.length > 0) loadColumnInfo();
+            return;
+        }
+        renderSimpleChart(xCol, yCol);
+    }
+
+    // ===================== 4. 运行分析 =====================
+    function runAnalysis() {
+        const algo = document.getElementById('algorithmSelect').value;
+        const params = {};
+
+        if (algo === 'kmeans') {
+            params.n_clusters = parseInt(document.getElementById('kmeansK').value) || 3;
+        } else if (algo === 'regression') {
+            params.target_col = document.getElementById('regTargetCol').value;
+        } else if (algo === 'pca') {
+            params.n_components = parseInt(document.getElementById('pcaN').value) || 2;
+        } else if (algo === 'random_forest') {
+            params.n_estimators = parseInt(document.getElementById('rfNEstimators').value) || 100;
+        }
+
+        const payload = {
+            algorithm: algo,
+            params: params,
+            x_col: document.getElementById('xColSelect').value,
+            y_col: document.getElementById('yColSelect').value
+        };
+
+        axios.post('/api/analyze', payload)
+            .then(response => {
+                const res = response.data;
+                if (res.status === 'error') {
+                    alert("分析失败: " + res.msg);
+                    return;
+                }
+
+                lastAnalysisResult = res;
+                currentNumericCols = res.numeric_columns || currentNumericCols;
+
+                // 渲染图表
+                renderChart(res, currentChartType);
+
+                // 渲染评估结果
+                renderEvaluation(res);
+
+                document.getElementById('chartHint').innerText = '分析完成 — 可切换图表类型查看';
+            })
+            .catch(err => {
+                console.error(err);
+                alert("分析请求失败，请检查后端 API。");
+            });
+    }
+
+    // ===================== 图表渲染核心 =====================
+    function renderChart(res, chartType, xCol, yCol) {
+        const container = document.getElementById('chartContainer');
+        if (!chartInstance) {
+            chartInstance = echarts.init(container);
+            window.addEventListener('resize', () => chartInstance.resize());
+        }
+
+        let option;
+
+        switch (chartType) {
+            case 'scatter':
+                option = buildScatterChart(res);
+                break;
+            case 'bar':
+                option = buildBarChart(res);
+                break;
+            case 'line':
+                option = buildLineChart(res);
+                break;
+            case 'heatmap':
+                option = buildHeatmapChart(res);
+                break;
+            case 'pie':
+                option = buildPieChart(res);
+                break;
+            default:
+                option = buildScatterChart(res);
+        }
+
+        chartInstance.setOption(option, true);
+    }
+
+    function buildScatterChart(res) {
+        const cd = res.chart_default;
+        if (cd && cd.data && cd.data.length > 0 && cd.data[0].cluster !== undefined) {
+            // 聚类散点图
+            const clusters = {};
+            cd.data.forEach(d => {
+                const key = `聚类 ${d.cluster + 1}`;
+                if (!clusters[key]) clusters[key] = [];
+                clusters[key].push([d.x, d.y]);
+            });
+
+            const series = Object.entries(clusters).map(([name, pts]) => ({
+                name, type: 'scatter', data: pts,
+                symbolSize: 6
+            }));
+
+            return {
+                title: { text: cd.title || '散点图', left: 'center', textStyle: { fontSize: 14 } },
+                tooltip: { trigger: 'item', formatter: p => `${p.seriesName}<br/>(${p.value[0].toFixed(2)}, ${p.value[1].toFixed(2)})` },
+                legend: { bottom: 5, data: Object.keys(clusters) },
+                xAxis: { name: cd.x_label || 'X', type: 'value' },
+                yAxis: { name: cd.y_label || 'Y', type: 'value' },
+                series: series
+            };
+        }
+
+        if (cd && cd.data_type === 'pred_vs_true' && cd.data && cd.data.length > 0) {
+            const pts = cd.data.map(d => [d.x, d.y]);
+            const minV = Math.min(...pts.flat());
+            const maxV = Math.max(...pts.flat());
+            return {
+                title: { text: cd.title || '预测 vs 真实', left: 'center', textStyle: { fontSize: 14 } },
+                tooltip: { trigger: 'item' },
+                xAxis: { name: cd.x_label || '真实值', type: 'value' },
+                yAxis: { name: cd.y_label || '预测值', type: 'value' },
+                series: [
+                    { name: '预测值', type: 'scatter', data: pts, symbolSize: 5 },
+                    { name: '理想线', type: 'line', data: [[minV, minV], [maxV, maxV]],
+                      lineStyle: { type: 'dashed', color: '#999' }, symbol: 'none' }
+                ]
+            };
+        }
+
+        // 通用散点图
+        const xCol = document.getElementById('xColSelect').value || (currentNumericCols[0] || '');
+        const yCol = document.getElementById('yColSelect').value || (currentNumericCols[1] || currentNumericCols[0] || '');
+        const data = (cd && cd.data) ? cd.data.map(d => [d.x, d.y]) : [];
+
+        return {
+            title: { text: `${yCol} vs ${xCol}`, left: 'center', textStyle: { fontSize: 14 } },
+            tooltip: { trigger: 'item' },
+            xAxis: { name: xCol, type: 'value' },
+            yAxis: { name: yCol, type: 'value' },
+            series: [{ name: '数据点', type: 'scatter', data: data, symbolSize: 5 }]
+        };
+    }
+
+    function buildBarChart(res) {
+        const cd = res.chart_default;
+
+        // 特征重要性柱状图
+        if (cd && cd.data_type === 'importance' && cd.data && cd.data.length > 0) {
+            return {
+                title: { text: cd.title || '特征重要性', left: 'center', textStyle: { fontSize: 14 } },
+                tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+                grid: { left: '15%', right: '5%', bottom: '10%' },
+                xAxis: { name: cd.y_label || '重要性', type: 'value' },
+                yAxis: {
+                    name: cd.x_label || '特征', type: 'category',
+                    data: cd.data.map(d => d.name).reverse(),
+                    axisLabel: { fontSize: 11 }
+                },
+                series: [{
+                    name: '重要性', type: 'bar',
+                    data: cd.data.map(d => d.value).reverse(),
+                    itemStyle: { color: '#0d6efd' }
+                }]
+            };
+        }
+
+        // 聚类分布柱状图
+        if (res.cluster_distribution) {
+            const keys = Object.keys(res.cluster_distribution);
+            const vals = Object.values(res.cluster_distribution);
+            return {
+                title: { text: '聚类分布', left: 'center', textStyle: { fontSize: 14 } },
+                tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+                xAxis: { data: keys, type: 'category' },
+                yAxis: { name: '样本数', type: 'value' },
+                series: [{
+                    name: '样本数', type: 'bar', data: vals,
+                    itemStyle: { color: '#198754' }
+                }]
+            };
+        }
+
+        // 数值列均值柱状图
+        const cols = currentNumericCols.slice(0, 10);
+        const vals = res.summary ? cols.map(c => (res.summary[c] || {}).mean || 0) : [];
+        return {
+            title: { text: '数值列均值对比', left: 'center', textStyle: { fontSize: 14 } },
+            tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+            grid: { left: '15%', right: '5%', bottom: '10%' },
+            xAxis: { name: '均值', type: 'value' },
+            yAxis: { data: cols.reverse(), type: 'category' },
+            series: [{ name: '均值', type: 'bar', data: vals.reverse(), itemStyle: { color: '#fd7e14' } }]
+        };
+    }
+
+    function buildLineChart(res) {
+        // 折线图：PCA 累计方差
+        if (res.cumulative_variance) {
+            return {
+                title: { text: 'PCA 累计解释方差', left: 'center', textStyle: { fontSize: 14 } },
+                tooltip: { trigger: 'axis' },
+                xAxis: { name: '主成分数', type: 'category',
+                    data: res.cumulative_variance.map((_, i) => `PC${i+1}`) },
+                yAxis: { name: '累计方差比', type: 'value', min: 0, max: 1 },
+                series: [{
+                    name: '累计解释方差', type: 'line',
+                    data: res.cumulative_variance,
+                    smooth: true, areaStyle: { opacity: 0.15 },
+                    itemStyle: { color: '#0d6efd' }
+                }]
+            };
+        }
+
+        // 通用折线图: summary 数据
+        const cols = currentNumericCols.slice(0, 8);
+        return {
+            title: { text: '数值列趋势', left: 'center', textStyle: { fontSize: 14 } },
+            tooltip: { trigger: 'axis' },
+            legend: { bottom: 5, data: ['均值', '中位数', '最大值', '最小值'] },
+            xAxis: { data: cols, type: 'category', axisLabel: { rotate: 30, fontSize: 10 } },
+            yAxis: { type: 'value' },
+            series: ['mean', 'median', 'max', 'min'].map(k => ({
+                name: {mean:'均值',median:'中位数',max:'最大值',min:'最小值'}[k],
+                type: 'line',
+                data: cols.map(c => (res.summary ? (res.summary[c] || {})[k] : null))
+            }))
+        };
+    }
+
+    function buildHeatmapChart(res) {
+        // 混淆矩阵热力图
+        if (res.confusion_matrix) {
+            const classes = res.class_names || Object.keys(res.confusion_matrix);
+            const data = [];
+            classes.forEach((trueLbl, i) => {
+                classes.forEach((predLbl, j) => {
+                    data.push([j, i, res.confusion_matrix[trueLbl][predLbl] || 0]);
+                });
+            });
+
+            return {
+                title: { text: '混淆矩阵', left: 'center', textStyle: { fontSize: 14 } },
+                tooltip: { position: 'top' },
+                grid: { left: '12%', right: '5%', top: '15%', bottom: '10%' },
+                xAxis: { name: '预测值', data: classes, type: 'category', position: 'top' },
+                yAxis: { name: '真实值', data: classes, type: 'category' },
+                visualMap: { min: 0, max: Math.max(...data.map(d => d[2]), 1),
+                    calculable: true, orient: 'horizontal', left: 'center', bottom: 0,
+                    inRange: { color: ['#f0f9ff', '#0d6efd'] } },
+                series: [{
+                    name: '样本数', type: 'heatmap', data: data,
+                    label: { show: true },
+                    emphasis: { itemStyle: { shadowBlur: 10, shadowColor: 'rgba(0,0,0,0.5)' } }
+                }]
+            };
+        }
+
+        // 相关性热力图
+        return {
+            title: { text: '请先运行分类分析以生成混淆矩阵', left: 'center', textStyle: { fontSize: 14 } },
+            series: []
+        };
+    }
+
+    function buildPieChart(res) {
+        // 聚类分布饼图
+        if (res.cluster_distribution) {
+            const data = Object.entries(res.cluster_distribution).map(([k, v]) => ({ name: k, value: v }));
+            return {
+                title: { text: '聚类分布占比', left: 'center', textStyle: { fontSize: 14 } },
+                tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
+                legend: { bottom: 5 },
+                series: [{
+                    name: '聚类分布', type: 'pie', radius: ['40%', '70%'],
+                    data: data,
+                    emphasis: { itemStyle: { shadowBlur: 10, shadowColor: 'rgba(0,0,0,0.5)' } },
+                    label: { formatter: '{b}\n{d}%' }
+                }]
+            };
+        }
+
+        // 分类分布饼图
+        if (res.class_names) {
+            return {
+                title: { text: '分类检测', left: 'center', textStyle: { fontSize: 14 } },
+                tooltip: { trigger: 'item' },
+                series: [{
+                    name: '类别', type: 'pie', radius: '60%',
+                    data: res.class_names.map(c => ({ name: c, value: 1 }))
+                }]
+            };
+        }
+
+        return {
+            title: { text: '请先运行聚类分析', left: 'center', textStyle: { fontSize: 14 } },
+            series: []
+        };
+    }
+
+    // 简单图表（无分析结果时）
+    function renderSimpleChart(xCol, yCol) {
+        // 此处仅作为占位 — 实际场景中需要从后端取原始数据
+        // 提示用户先上传数据或运行分析
+        const container = document.getElementById('chartContainer');
+        if (!chartInstance) {
+            chartInstance = echarts.init(container);
+            window.addEventListener('resize', () => chartInstance.resize());
+        }
+        chartInstance.setOption({
+            title: { text: '请上传数据后查看图表', left: 'center', top: 'center', textStyle: { color: '#999', fontSize: 16 } }
+        }, true);
+    }
+
+    // ===================== 5. 评估结果渲染 =====================
+    function renderEvaluation(res) {
+        const card = document.getElementById('resultCard');
+        const content = document.getElementById('resultContent');
+        card.style.display = 'block';
+
+        let html = `<h6 class="text-primary">${res.algorithm || '分析结果'}</h6>`;
+
+        // 评估指标
+        if (res.evaluation && Object.keys(res.evaluation).length > 0) {
+            html += `<table class="table table-bordered table-sm metrics-table mt-2">
+                <thead class="table-light"><tr><th>指标</th><th>值</th></tr></thead><tbody>`;
+            for (const [k, v] of Object.entries(res.evaluation)) {
+                html += `<tr><td>${k}</td><td><strong>${v}</strong></td></tr>`;
+            }
+            html += `</tbody></table>`;
+        }
+
+        // 聚类中心
+        if (res.cluster_centers && res.cluster_centers.length > 0) {
+            html += `<h6 class="mt-3">聚类中心</h6>
+                <table class="table table-bordered table-sm metrics-table"><thead class="table-light"><tr>`;
+            const keys = Object.keys(res.cluster_centers[0]);
+            html += `<th>聚类</th>` + keys.map(k => `<th>${k}</th>`).join('') + `</tr></thead><tbody>`;
+            res.cluster_centers.forEach((c, i) => {
+                html += `<tr><td>聚类 ${i+1}</td>` + keys.map(k => `<td>${c[k]}</td>`).join('') + `</tr>`;
+            });
+            html += `</tbody></table>`;
+        }
+
+        // 回归系数
+        if (res.coefficients) {
+            html += `<h6 class="mt-3">回归系数</h6>
+                <table class="table table-bordered table-sm metrics-table"><thead class="table-light">
+                <tr><th>特征</th><th>系数</th></tr></thead><tbody>`;
+            for (const [k, v] of Object.entries(res.coefficients)) {
+                html += `<tr><td>${k}</td><td>${v}</td></tr>`;
+            }
+            html += `<tr><td><em>截距</em></td><td>${res.intercept}</td></tr></tbody></table>`;
+        }
+
+        // PCA 方差
+        if (res.explained_variance_ratio) {
+            html += `<h6 class="mt-3">各主成分解释方差</h6>
+                <table class="table table-bordered table-sm metrics-table"><thead class="table-light">
+                <tr><th>主成分</th><th>解释方差比</th><th>累计</th></tr></thead><tbody>`;
+            res.explained_variance_ratio.forEach((v, i) => {
+                html += `<tr><td>PC${i+1}</td><td>${(v*100).toFixed(2)}%</td><td>${(res.cumulative_variance[i]*100).toFixed(2)}%</td></tr>`;
+            });
+            html += `</tbody></table>`;
+        }
+
+        // 分类报告
+        if (res.classification_report && Object.keys(res.classification_report).length > 0) {
+            html += `<h6 class="mt-3">分类报告</h6>
+                <table class="table table-bordered table-sm metrics-table"><thead class="table-light">
+                <tr><th>类别</th><th>精确率</th><th>召回率</th><th>F1</th><th>样本数</th></tr></thead><tbody>`;
+            for (const [cls, metrics] of Object.entries(res.classification_report)) {
+                if (typeof metrics === 'object' && metrics.precision !== undefined) {
+                    html += `<tr><td>${cls}</td><td>${metrics.precision}</td><td>${metrics.recall}</td><td>${metrics['f1-score']}</td><td>${metrics.support}</td></tr>`;
+                }
+            }
+            html += `</tbody></table>`;
+        }
+
+        // 特征重要性
+        if (res.feature_importance && Object.keys(res.feature_importance).length > 0) {
+            html += `<h6 class="mt-3">特征重要性（随机森林）</h6>
+                <table class="table table-bordered table-sm metrics-table"><thead class="table-light">
+                <tr><th>特征</th><th>重要性</th></tr></thead><tbody>`;
+            for (const [k, v] of Object.entries(res.feature_importance)) {
+                html += `<tr><td>${k}</td><td>${v}</td></tr>`;
+            }
+            html += `</tbody></table>`;
+        }
+
+        content.innerHTML = html;
+    }
+
+    // ===================== 辅助：渲染表格 =====================
+    function renderTable(columns, dataRows) {
+        const thead = document.getElementById('tableHead');
+        const tbody = document.getElementById('tableBody');
+
+        let headHTML = '<tr>';
+        columns.forEach(col => headHTML += `<th>${col}</th>`);
+        headHTML += '</tr>';
+        thead.innerHTML = headHTML;
+
+        let bodyHTML = '';
+        dataRows.forEach(row => {
+            bodyHTML += '<tr>';
+            row.forEach(cell => {
+                const val = (cell === null) ? "" : cell;
+                bodyHTML += `<td>${val}</td>`;
+            });
+            bodyHTML += '</tr>';
+        });
+        tbody.innerHTML = bodyHTML;
+    }
+
+    // ===================== 导出 =====================
+    function exportData() {
+        window.location.href = '/api/export';
+    }
+    </script>
+</body>
+</html>

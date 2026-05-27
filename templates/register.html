@@ -96,7 +96,7 @@
             toast.style.display = 'block';
             toast.style.opacity = '1';
 
-            // 2秒后自动消失
+            // 等待 2s → 透明淡出 → 再等 300ms → 彻底隐藏
             setTimeout(() => {
                 toast.style.opacity = '0';
                 setTimeout(() => {
@@ -114,6 +114,7 @@
             const formData = new FormData(this);
 
             // 发送 POST 请求到后端的 /register 接口
+            //then处理业务错：提示具体原因（账号已存在、密码不一致）  catch处理网络错：统一提示「服务器繁忙」
             axios.post('/register', formData)
                 .then(response => {
                     const data = response.data;
@@ -133,6 +134,7 @@
                     showMsg("服务器繁忙，请稍后再试");
                     console.error(error);
                 });
+
         });
     </script>
 </body>

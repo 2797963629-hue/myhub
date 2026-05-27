@@ -39,6 +39,7 @@
                                 <label class="form-label">密码</label>
                                 <input type="password" class="form-control" name="pwd" required>
                             </div>
+                            <!--type="submit"：表单提交按钮 放在 <form> 内部，点击后会触发整个表单提交动作，把账号、密码发给后端。  -->
                             <button type="submit" class="btn btn-primary w-100 mb-3">立即登录</button>
                             <div class="text-center">
                                 <a href="/register_page" class="text-decoration-none">还没有账号？去注册</a>
@@ -60,8 +61,11 @@
         }
 
         document.getElementById('loginForm').addEventListener('submit', function(e) {
-            e.preventDefault();
+            e.preventDefault();//阻止页面刷新
             const fd = new FormData(this);
+            //'/login'：后端接口地址，服务器专门用来处理登录逻辑的接口路径
+            //fd：上面用 FormData 打包好的「账号 + 密码」数据，传给后端
+            //Axios 基于 Promise 语法，请求成功、后端正常返回数据后，进入 then 回调   r：响应对象，接收后端返回的所有数据。
             axios.post('/login', fd).then(r => {
                 if(r.data.status === 'success') {
                     window.location.href = '/home';

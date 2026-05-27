@@ -9,6 +9,7 @@ from sklearn.cluster import KMeans
 from sklearn.linear_model import LinearRegression
 from sklearn.decomposition import PCA
 from sklearn.ensemble import RandomForestClassifier
+# PCA 仅用于 K-Means 聚类可视化，不再作为独立算法暴露
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import silhouette_score, mean_squared_error, r2_score, mean_absolute_error, accuracy_score, classification_report
 from sklearn.preprocessing import StandardScaler, LabelEncoder
@@ -23,6 +24,7 @@ DB_USER = "root"
 DB_PASSWORD = "123456"  # 改成你自己的
 DB_NAME = "idas_userif"       # 你自己建的库名
 
+#get_conn 函数的作用是创建并返回一个数据库连接对象，它是获取数据库连接的入口
 def get_conn():
     return pymysql.connect(
         host=DB_HOST,
@@ -66,9 +68,9 @@ def register_page():
     return render_template("register.html")
 
 # 注册逻辑
-@app.route("/register", methods=["POST"])
+@app.route("/register", methods=["POST"])#post不明文显示用户输入
 def register():
-    user_id = request.form.get("id")
+    user_id = request.form.get("id")#request.form.get 用于获取POST 表单提交的数据
     pwd = request.form.get("pwd")
     pwd2 = request.form.get("pwd2")
 
@@ -77,6 +79,11 @@ def register():
     if pwd != pwd2:
         return jsonify({"status": "error", "msg": "两次密码不一致"})
 
+    #conn = 数据库通道
+    #cur = 数据库操作工具（游标）
+    #cur.execute() = 跑SQL
+    #cur.fetchone() = 读查询结果
+    #增删改 → 必须commit()才生效
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("SELECT * FROM users WHERE id=%s", (user_id,))
@@ -106,10 +113,10 @@ def login():
     else:
         return jsonify({"status": "error", "msg": "账号或密码错误"})
 
-# 文件上传接口 - 已修复嵌套错误
+# 文件上传接口
 @app.route("/api/upload", methods=["POST"])
 def upload_api():
-    if 'file' not in request.files:
+    if 'file' not in request.files: #这句话意思：去 request.files 字典里找有没有键名为 file 的项。用户一般不会触发
         return jsonify({"status": "error", "msg": "未找到文件部分"})
 
     file = request.files['file']
@@ -117,7 +124,8 @@ def upload_api():
         return jsonify({"status": "error", "msg": "未选择文件"})
 
     if file:
-        filename = secure_filename(file.filename)
+        #把上传的文件放到uploads文件夹
+        filename = secure_filename(file.filename)#安全处理文件名，过滤非法字符
         file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         file.save(file_path)
 
@@ -126,7 +134,6 @@ def upload_api():
             if filename.endswith('.csv'):
                 df = pd.read_csv(file_path)
             else:
-                # 注意：读取 excel 需要安装 pip install openpyxl
                 df = pd.read_excel(file_path)
 
             columns = df.columns.tolist()
@@ -135,13 +142,13 @@ def upload_api():
             # 保存当前数据状态
             current_state["file_path"] = file_path
             current_state["columns"] = columns
-            current_state["dtypes"] = {col: str(dtype) for col, dtype in df.dtypes.items()}
+            current_state["dtypes"] = {col: str(dtype) for col, dtype in df.dtypes.items()}#df.dtypes.items()：遍历每一组(列名col, 列数据类型dtype)。
 
             # 限制预览行数
             limit = 1000
-            display_df = df.iloc[:limit]
+            display_df = df.iloc[:limit]#iloc[]：按行索引位置切片取值，纯数字索引选取,选取前 limit 行
 
-            # 转换为列表并处理 NaN 值 (JSON 不支持 NaN)
+            # 转换为列表并处理 NaN 值 (JSON 不支持 NaN);df.where(条件, 替换值)
             data_to_send = display_df.where(pd.notnull(display_df), None).values.tolist()
 
             return jsonify({
@@ -218,6 +225,7 @@ def export_api():
     if not file_path or not os.path.exists(file_path):
         return jsonify({"status": "error", "msg": "请先上传数据"})
 
+    #代码功能：接收请求后，返回指定文件，并强制浏览器弹出下载框。
     from flask import send_file
     return send_file(file_path, as_attachment=True)
 
@@ -228,6 +236,7 @@ def columns_api():
     if not file_path or not os.path.exists(file_path):
         return jsonify({"status": "error", "msg": "请先上传数据"})
 
+    #根据数据类型，把数据表列自动划分为数值列和分类列两大类
     cols = current_state.get("columns", [])
     dtypes = current_state.get("dtypes", {})
     numeric_cols = [c for c in cols if 'int' in dtypes.get(c, '') or 'float' in dtypes.get(c, '')]
@@ -250,6 +259,7 @@ def chart_data_api():
     req_data = request.get_json() or {}
     x_col = req_data.get("x_col", "")
     y_col = req_data.get("y_col", "")
+    pie_col = req_data.get("pie_col", "")
 
     try:
         if file_path.endswith('.csv'):
@@ -258,13 +268,24 @@ def chart_data_api():
             df = pd.read_excel(file_path)
 
         if len(df) > 2000:
+            #若数据行数超 2000，随机抽取2000 行（random_state=42保证抽样结果固定可复现）。
             df = df.sample(2000, random_state=42)
 
+        #选数值列
         numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+        #选分类列
         cat_cols = df.select_dtypes(include=['object', 'category']).columns.tolist()
+        #取所有列
         all_cols = df.columns.tolist()
         result = {"status": "success"}
 
+        """
+        功能模块：生成各类图表所需数据
+        1. 相关性矩阵（热力图）：仅数值列 >=2 时计算相关系数
+        2. 饼图：统计首个分类列的分布，最多取前15项
+        3. 散点/折线图：自动适配XY轴，剔除空值
+        4. 柱状图：计算数值列 均值/最大/最小/标准差
+        """
         # ---- 相关性矩阵（热力图用） ----
         if len(numeric_cols) >= 2:
             corr = df[numeric_cols].corr()
@@ -274,12 +295,12 @@ def chart_data_api():
                            for row in corr.values.tolist()]
             }
 
-        # ---- 饼图数据（取第一个分类列的分布） ----
-        if cat_cols:
-            ccol = cat_cols[0]
-            vc = df[ccol].value_counts().head(15)
+        # ---- 饼图数据（优先使用用户指定的列，否则取第一个分类列） ----
+        pie_target = pie_col if pie_col and pie_col in df.columns else (cat_cols[0] if cat_cols else (all_cols[0] if all_cols else None))
+        if pie_target:
+            vc = df[pie_target].value_counts().head(15)
             result["pie_data"] = [{"name": str(k), "value": int(v)} for k, v in vc.items()]
-            result["pie_column"] = ccol
+            result["pie_column"] = pie_target
 
         # ---- 散点图 / 折线图数据 ----
         use_x = x_col if x_col and x_col in df.columns else (numeric_cols[0] if numeric_cols else "")
@@ -319,7 +340,7 @@ def analyze_api():
         return jsonify({"status": "error", "msg": "请先上传数据文件"})
 
     req = request.get_json() or {}
-    algorithm = req.get("algorithm", "kmeans")
+    algorithm = req.get("algorithm", "kmeans")#默认值是聚类
     params = req.get("params", {})
 
     # 图表相关参数
@@ -343,7 +364,7 @@ def analyze_api():
         else:
             df_sample = df.copy()
 
-        # 对数值列做标准化
+        # 对数值列做标准化，把数据里的数值列，删掉空值后，统一缩放到「均值 0、标准差 1」，得到可直接喂给机器学习模型（KMeans/PCA/ 回归）的标准数据 X
         scaler = StandardScaler()
         X = scaler.fit_transform(df_sample[numeric_cols].dropna())
 
@@ -461,53 +482,6 @@ def analyze_api():
                     "title": f"线性回归: 预测值 vs 真实值 (R²={round(r2,3)})",
                     "x_label": f"真实值 ({target_col})",
                     "y_label": f"预测值 ({target_col})"
-                }
-            })
-
-        # ============================================================
-        # PCA 降维
-        # ============================================================
-        elif algorithm == "pca":
-            n = int(params.get("n_components", 2))
-            n = max(1, min(n, min(len(numeric_cols), len(df_sample))))
-
-            pca_model = PCA(n_components=n)
-            reduced = pca_model.fit_transform(X)
-
-            # 解释方差比
-            evr = [round(float(v), 4) for v in pca_model.explained_variance_ratio_]
-            cumsum = [round(float(v), 4) for v in np.cumsum(evr)]
-
-            # 降维后的散点数据
-            if n >= 2:
-                scatter_data = [{"x": float(reduced[i][0]), "y": float(reduced[i][1])}
-                                for i in range(len(reduced))]
-            else:
-                scatter_data = [{"x": float(reduced[i][0]), "y": 0}
-                                for i in range(len(reduced))]
-
-            # 主成分载荷
-            loadings = {}
-            for i in range(n):
-                loadings[f"PC{i+1}"] = {numeric_cols[j]: round(float(pca_model.components_[i][j]), 4)
-                                         for j in range(len(numeric_cols))}
-
-            result.update({
-                "algorithm": "PCA 主成分分析",
-                "n_components": n,
-                "explained_variance_ratio": evr,
-                "cumulative_variance": cumsum,
-                "component_loadings": loadings,
-                "evaluation": {
-                    "累计解释方差": round(cumsum[-1], 4),
-                    f"PC1 解释方差": evr[0],
-                },
-                "chart_default": {
-                    "type": "scatter",
-                    "data": scatter_data,
-                    "title": f"PCA 降维 ({n} 维) — 前 2 主成分投影",
-                    "x_label": f"PC1 ({round(evr[0]*100,1)}%)",
-                    "y_label": f"PC2 ({round(evr[1]*100,1)}%)" if n >= 2 else "—"
                 }
             })
 
